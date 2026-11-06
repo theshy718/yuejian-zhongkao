@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>阅见 · 中考语文资料库</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header>
+  <div class="brand">阅见 <span>中考语文 · 学习资料库</span></div>
+</header>
+<main>
+<div id="student-home">
+  <section class="intro">
+    <p class="eyebrow">读懂文章 · 有据作答</p>
+    <h1>让每一种题型，都有迹可循。</h1>
+    <p>从课文走向考场，按考点找例题。看见依据，再组织答案。</p>
+    <div id="stats" class="stats" aria-live="polite">正在载入资料…</div>
+  </section>
+  <aside class="edition"><strong>先核对教材版次</strong>　当前收录为六册目录汇编，不是单一最新印次全集。七下《最后一课》/《老山界》、八上《孟子》二章/三章及说明文单元、2024 秋七上与八上均有调整，请以学校实物教材为准。不提供教材全文。</aside>
+  <section class="library panel">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">学生查询</p>
+        <h2>课文与同型题</h2>
+      </div>
+      <span id="count"></span>
+    </div>
+    <div class="tabs" role="tablist" aria-label="资料类别">
+      <button role="tab" aria-selected="true" data-tab="texts">课文目录</button>
+      <button role="tab" aria-selected="false" data-tab="questions">试题题库</button>
+      <button role="tab" aria-selected="false" data-tab="points">八大考点</button>
+    </div>
+    <label class="search">搜索关键词<input id="search" type="search" placeholder="篇名、作者、题干、答案或出处…"></label>
+    <div id="filters" class="filters"></div>
+    <div id="results" aria-live="polite"></div>
+    <div class="pagination">
+      <button id="prev">上一页</button>
+      <span id="page"></span>
+      <button id="next">下一页</button>
+    </div>
+  </section>
+</div>
+<footer>阅见 · 独立教学资料工具，不隶属任何培训品牌。原始题目保留来源，解析来源分别标注。<br>公开学生查询版 · 仅供查询，不提供在线录入、上传或网址抓取。</footer>
+</main>
+</body>
+</html>
