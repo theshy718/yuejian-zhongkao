@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>阅见 · 老师工作台</title>
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<main>
+  <section id="gate" class="gate" aria-labelledby="gate-title">
+    <p class="eyebrow">老师专用</p>
+    <h1 id="gate-title">阅见 · 老师工作台</h1>
+    <p class="brand-line">学生查询站与本页分开。请输入通行口令后继续。</p>
+    <label>通行口令
+      <input id="passphrase" type="password" autocomplete="current-password" placeholder="请输入口令" enterkeyhint="go">
+    </label>
+    <button type="button" id="unlock" class="primary">进入工作台</button>
+    <p id="gate-status" class="status error" role="status"></p>
+  </section>
+
+  <div id="workbench" class="hidden">
+    <header>
+      <div class="brand">阅见 <span>老师工作台</span></div>
+      <p class="header-note">学生查询请用单独链接 · <a href="../">打开学生站</a></p>
+    </header>
+
+    <section class="intro">
+      <p class="eyebrow">改站 / 加题</p>
+      <h1>把需求发给小克</h1>
+      <p class="muted">在这里可以向小克提交改站/加题需求；提交后由小克处理并更新学生站。静态页无法直接改库，提交会打开邮件或供你复制全文。</p>
+      <div id="lib-stats" class="stats" aria-live="polite">正在读取当前题库…</div>
+    </section>
+
+    <section class="panel" aria-labelledby="ask-title">
+      <p class="eyebrow">发给小克</p>
+      <h2 id="ask-title">提交修改需求</h2>
+      <form id="ask-form">
+        <label>需求类型
+          <select name="type" id="ask-type">
+            <option value="改网页">改网页</option>
+            <option value="加题入库">加题入库</option>
+            <option value="考点讲解片">考点讲解片</option>
+            <option value="其他" selected>其他</option>
+          </select>
+        </label>
+        <label>需求说明 <b>*</b>
+          <textarea name="message" id="ask-message" rows="6" required maxlength="20000" placeholder="写清楚想改什么、加哪道题、或讲解片要放哪里…"></textarea>
+        </label>
+        <label>联系备注（可选）
+          <input name="contact" id="ask-contact" maxlength="200" placeholder="方便回访的称呼或备注，可留空">
+        </label>
+        <button type="submit" class="primary">提交给小克</button>
+        <button type="button" id="ask-copy" class="secondary">复制需求全文</button>
+        <p id="ask-status" class="status" role="status"></p>
+      </form>
+    </section>
+
+    <section class="panel" aria-labelledby="draft-title">
+      <p class="eyebrow">题库草稿</p>
+      <h2 id="draft-title">整理一道题发给小克</h2>
+      <p class="muted">填写后会按「加题入库」打包发给小克，不会立刻写入公开学生站。</p>
+      <form id="draft-form">
+        <div class="two">
+          <label>选文篇名<input name="passage_title" maxlength="200"></label>
+          <label>选文作者<input name="passage_author" maxlength="100"></label>
+        </div>
+        <label>题干 / 图片题说明 <b>*</b>
+          <textarea name="stem" rows="4" required maxlength="30000" placeholder="填写完整题干。图片题请补充可检索的文字说明。"></textarea>
+        </label>
+        <label>参考答案
+          <textarea name="answer" rows="3" maxlength="30000" placeholder="没有可核实答案时留空，不要编造。"></textarea>
+        </label>
+        <fieldset>
+          <legend>考点（可多选）<b>*</b></legend>
+          <div id="point-checks" class="checks"></div>
+        </fieldset>
+        <div class="two">
+          <label>年份<input name="year" type="number" min="1900" max="2100" placeholder="如 2024"></label>
+          <label>地区<input name="region" maxlength="100" placeholder="如 山东烟台"></label>
+        </div>
+        <label>考试类型<input name="exam_type" maxlength="100" placeholder="中考真题 / 期末 / 自拟（请如实标注）"></label>
+        <label>关联课文<input name="related_textbook" maxlength="200" placeholder="可留空，或填关联篇名"></label>
+        <label class="inline"><input name="in_class" type="checkbox"> 本题选文为课内课文（仅关联课文不等于课内题）</label>
+        <label>出处 <b>*</b><input name="source" required maxlength="1000" placeholder="原卷名称、发布单位或整理者；自拟题须注明"></label>
+        <label>来源网址<input name="url" type="url" maxlength="2000" placeholder="可留空"></label>
+        <button type="submit" class="primary">提交加题需求</button>
+        <button type="button" id="draft-copy" class="secondary">复制需求全文</button>
+        <p id="draft-status" class="status" role="status"></p>
+      </form>
+    </section>
+
+    <footer>阅见 · 老师工作台（公开静态版）· 口令仅存本机会话 · 学生站与老师入口分开</footer>
+  </div>
+</main>
+</body>
+</html>
