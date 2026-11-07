@@ -148,9 +148,11 @@ async function pollOnce() {
       }
     } else {
       pollFailStreak += 1;
+      if (pollFailStreak === 4) appendStatus('同步回复失败，请强制刷新页面（Ctrl+F5）后再试。', false);
     }
   } catch {
     pollFailStreak += 1;
+    if (pollFailStreak === 4) appendStatus('同步回复失败，请强制刷新页面（Ctrl+F5）后再试。', false);
   }
   const delay = pollFailStreak > 3 ? 8000 : pollIntervalMs();
   pollTimer = setTimeout(pollOnce, delay);
@@ -283,8 +285,14 @@ async function sendChat({ type, message, draft }) {
     let data = null;
     try { data = await r.json(); } catch {}
     if (r.ok && data && data.ok) {
-      appendStatus('已送达，等待小克回复…', true);
-      resetPollSoon();
+      appendStatus('已送达，等待小克在此回复…', true);
+      let bursts = 0;
+      const burst = () => {
+        bursts += 1;
+        resetPollSoon();
+        if (bursts < 45) setTimeout(burst, 2000);
+      };
+      burst();
     } else {
       const err = (data && data.error) ? String(data.error) : ('HTTP ' + r.status);
       appendStatus('发送失败：' + err + '。可点「复制」后粘贴到和小克的对话。', false);
@@ -363,6 +371,19 @@ function bind() {
       $('#send').click();
     }
   });
+
+  
+  $('#refresh-replies').onclick = () => {
+    markActivity();
+    afterId = 0;
+    seenBotIds.clear();
+    document.querySelectorAll('#messages .bubble.bot').forEach(el => {
+      if (el.classList.contains('system') || el.classList.contains('ok') || el.classList.contains('err')) return;
+      el.remove();
+    });
+    resetPollSoon();
+    appendStatus('正在拉取回复…', true);
+  };
 
   $('#copy-last').onclick = async () => {
     const text = lastPlain || ($('#chat-input').value || '').trim();

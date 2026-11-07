@@ -6,8 +6,8 @@
 <meta name="robots" content="noindex,nofollow">
 <title>阅见 · 老师工作台</title>
 <link rel="stylesheet" href="style.css">
-<script src="config.js"></script>
-<script src="app.js" defer></script>
+<script src="config.js?v=1794066755"></script>
+<script src="app.js?v=1794066755" defer></script>
 </head>
 <body>
 <main>
@@ -82,9 +82,10 @@
         <textarea id="chat-input" rows="2" maxlength="20000" placeholder="直接跟小克说：改站、加题、讲解片放哪里…" enterkeyhint="send"></textarea>
         <div class="composer-actions">
           <button type="button" id="send" class="primary send">发送</button>
+          <button type="button" id="refresh-replies" class="secondary ghost">刷新回复</button>
           <button type="button" id="copy-last" class="secondary ghost">复制</button>
         </div>
-        <p id="chat-hint" class="hint">消息会发到小克这边；回复会出现在 Grok Bot 对话里。</p>
+        <p id="chat-hint" class="hint">消息会发到小克；回复会出现在上方对话框（若没有，点「刷新回复」或 Ctrl+F5）。</p>
       </div>
     </section>
 
