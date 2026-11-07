@@ -94,7 +94,20 @@ function appendStatus(text, ok) {
 
 
 const seenBotIds = new Set();
-let afterId = 0;
+const AFTER_KEY = 'yuejian-teacher-after';
+function loadAfterId() {
+  try {
+    const n = Number(sessionStorage.getItem(AFTER_KEY) || '0');
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+function saveAfterId(id) {
+  afterId = id;
+  try { sessionStorage.setItem(AFTER_KEY, String(id)); } catch {}
+}
+let afterId = loadAfterId();
 let pollTimer = null;
 let lastActivity = Date.now();
 let pollFailStreak = 0;
@@ -136,15 +149,21 @@ async function pollOnce() {
     try { data = await r.json(); } catch {}
     if (r.ok && data && data.ok && Array.isArray(data.messages)) {
       pollFailStreak = 0;
+      let gotNew = false;
       for (const m of data.messages) {
         const id = Number(m.id);
         if (!Number.isFinite(id)) continue;
-        if (id > afterId) afterId = id;
+        if (id > afterId) saveAfterId(id);
         if (m.role !== 'bot') continue;
         if (seenBotIds.has(id)) continue;
         seenBotIds.add(id);
         appendBubble({ role: 'bot', text: String(m.body || '') });
         markActivity();
+        gotNew = true;
+      }
+      if (window.__refreshPending) {
+        window.__refreshPending = false;
+        if (!gotNew) appendStatus('暂无新回复。', true);
       }
     } else {
       pollFailStreak += 1;
@@ -375,14 +394,9 @@ function bind() {
   
   $('#refresh-replies').onclick = () => {
     markActivity();
-    afterId = 0;
-    seenBotIds.clear();
-    document.querySelectorAll('#messages .bubble.bot').forEach(el => {
-      if (el.classList.contains('system') || el.classList.contains('ok') || el.classList.contains('err')) return;
-      el.remove();
-    });
+    window.__refreshPending = true;
     resetPollSoon();
-    appendStatus('正在拉取回复…', true);
+    appendStatus('正在检查新回复…', true);
   };
 
   $('#copy-last').onclick = async () => {
