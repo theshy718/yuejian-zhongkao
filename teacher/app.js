@@ -1,12 +1,15 @@
 'use strict';
 
 const PASS_KEY = 'yuejian-teacher-ok';
+const THREAD_KEY = 'yuejian-teacher-thread';
 const DEFAULT_PASS = 'yuejian-laoshi';
-const MAILTO = 'qiuke+yuejian-teacher@mail.grokbot.com';
 const SHORT_NAMES = ['内容概括','心理与形象','作者情感','语句含义','记叙顺序','标题含义作用','情节心理变化','描写方法'];
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+let currentType = '其他';
+let lastPlain = '';
 
 function unlocked() {
   try { return sessionStorage.getItem(PASS_KEY) === '1'; } catch { return false; }
@@ -15,30 +18,89 @@ function setUnlocked(v) {
   try { sessionStorage.setItem(PASS_KEY, v ? '1' : '0'); } catch {}
 }
 
+function uuid() {
+  if (crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+function threadId() {
+  try {
+    let id = sessionStorage.getItem(THREAD_KEY);
+    if (!id) {
+      id = uuid();
+      sessionStorage.setItem(THREAD_KEY, id);
+    }
+    return id;
+  } catch {
+    return uuid();
+  }
+}
+
+function chatApi() {
+  const u = (typeof window.YUEJIAN_TEACHER_CHAT_API === 'string' && window.YUEJIAN_TEACHER_CHAT_API.trim()) || '';
+  return u || 'https://yuejian-zhongkao.vercel.app/api/teacher-chat';
+}
+
 function showWorkbench(ok) {
   $('#gate').classList.toggle('hidden', ok);
   $('#workbench').classList.toggle('hidden', !ok);
-  if (ok) loadStats();
+  if (ok) {
+    loadStats();
+    if (!$('#messages').dataset.ready) {
+      appendSystem('你好，我是小克。改网页、加题、讲解片需求直接发在这里。回复会出现在 Grok Bot 对话里。');
+      $('#messages').dataset.ready = '1';
+    }
+    $('#chat-input').focus();
+  }
 }
 
-function status(id, msg, good) {
-  const el = $(id);
+function gateStatus(msg) {
+  const el = $('#gate-status');
+  el.textContent = msg || '';
+  el.className = 'status ' + (msg ? 'error' : '');
+}
+
+function draftStatus(msg, good) {
+  const el = $('#draft-status');
   el.textContent = msg || '';
   el.className = 'status ' + (good ? 'success' : (msg ? 'error' : ''));
+}
+
+function appendBubble({ role, text, kind }) {
+  const box = $('#messages');
+  const div = document.createElement('div');
+  div.className = 'bubble ' + role + (kind ? ' ' + kind : '');
+  div.innerHTML = '<div class="bubble-meta">' + esc(role === 'user' ? '你' : '小克') + '</div>'
+    + '<div class="bubble-body">' + esc(text).replace(/\n/g, '<br>') + '</div>';
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  return div;
+}
+
+function appendSystem(text) {
+  return appendBubble({ role: 'bot', text, kind: 'system' });
+}
+
+function appendStatus(text, ok) {
+  return appendBubble({ role: 'bot', text, kind: ok ? 'ok' : 'err' });
 }
 
 function nowISO() {
   return new Date().toISOString();
 }
 
-function buildPlainText({ type, message, draft, contact }) {
+function buildPlainText({ type, message, draft }) {
   const lines = [
     '【阅见老师需求】',
     '类型：' + type,
     '提交时间：' + new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) + '（Asia/Shanghai）',
     '页面：' + location.href,
+    '会话：' + threadId(),
   ];
-  if (contact) lines.push('联系备注：' + contact);
   lines.push('', '需求说明：', message || '（无）');
   if (draft) {
     lines.push('', '—— 题库草稿 ——');
@@ -62,48 +124,6 @@ function buildPlainText({ type, message, draft, contact }) {
   return lines.join('\n');
 }
 
-function buildPayload({ type, message, draft, contact }) {
-  return {
-    source: 'yuejian-teacher',
-    type,
-    message: contact ? (message + '\n\n联系备注：' + contact) : message,
-    draft: draft || null,
-    submittedAt: nowISO(),
-    page: location.href,
-  };
-}
-
-async function tryWebhook(payload) {
-  const url = (typeof window.YUEJIAN_TEACHER_WEBHOOK === 'string' && window.YUEJIAN_TEACHER_WEBHOOK.trim()) || '';
-  if (!url) return { attempted: false, ok: false };
-  try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      mode: 'cors',
-    });
-    return { attempted: true, ok: r.ok, status: r.status };
-  } catch (e) {
-    return { attempted: true, ok: false, error: e.message || String(e) };
-  }
-}
-
-function openMailto(type, plain) {
-  const subject = '【阅见老师】' + type;
-  const href = 'mailto:' + encodeURIComponent(MAILTO)
-    + '?subject=' + encodeURIComponent(subject)
-    + '&body=' + encodeURIComponent(plain);
-  // Prefer location for mobile mail apps; fallback to window.open if too long may truncate
-  const a = document.createElement('a');
-  a.href = href;
-  a.rel = 'noopener';
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
-
 async function copyText(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     await navigator.clipboard.writeText(text);
@@ -119,27 +139,6 @@ async function copyText(text) {
   const ok = document.execCommand('copy');
   ta.remove();
   return ok;
-}
-
-async function submitRequest({ type, message, draft, contact, statusId }) {
-  if (!message || !String(message).trim()) {
-    status(statusId, '请填写需求说明。');
-    return;
-  }
-  const payload = buildPayload({ type, message: message.trim(), draft, contact: (contact || '').trim() });
-  const plain = buildPlainText({ type, message: message.trim(), draft, contact: (contact || '').trim() });
-
-  status(statusId, '正在提交…', true);
-  const wh = await tryWebhook(payload);
-  openMailto(type, plain);
-
-  let note = '已打开邮件应用，请确认发送给小克。若未弹出邮件，请点「复制需求全文」，粘贴到和小克的对话里。';
-  if (wh.attempted && wh.ok) note = '已尝试推送 webhook，并已打开邮件应用。若邮件未弹出，请复制全文发给小克。';
-  else if (wh.attempted && !wh.ok) note = 'webhook 推送未成功（可忽略），已打开邮件应用。也可复制全文发给小克。';
-  status(statusId, note, true);
-  // stash last plain for copy buttons
-  window.__yuejianLastPlain = plain;
-  return plain;
 }
 
 function readDraftForm(form) {
@@ -169,7 +168,7 @@ function draftMessage(d) {
     '篇名：' + (d.passage_title || '未填'),
     '作者：' + (d.passage_author || '未填'),
     '考点：' + pts,
-    '年份/地区：' + [d.year || '', d.region || ''].filter(Boolean).join(' · ') || '未填',
+    '年份/地区：' + ([d.year || '', d.region || ''].filter(Boolean).join(' · ') || '未填'),
     '出处：' + (d.source || '未填'),
     '',
     '题干：',
@@ -178,6 +177,49 @@ function draftMessage(d) {
     '参考答案：',
     d.answer || '（空）',
   ].join('\n');
+}
+
+async function sendChat({ type, message, draft }) {
+  const text = String(message || '').trim();
+  if (!text) return;
+
+  const display = (type && type !== '其他' ? '【' + type + '】\n' : '') + text;
+  appendBubble({ role: 'user', text: display });
+  lastPlain = buildPlainText({ type, message: text, draft });
+
+  const payload = {
+    source: 'yuejian-teacher-chat',
+    type: type || '其他',
+    message: text,
+    draft: draft || null,
+    threadId: threadId(),
+    submittedAt: nowISO(),
+    page: location.href,
+    passphrase: DEFAULT_PASS,
+  };
+
+  const btn = $('#send');
+  btn.disabled = true;
+  try {
+    const r = await fetch(chatApi(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      mode: 'cors',
+    });
+    let data = null;
+    try { data = await r.json(); } catch {}
+    if (r.ok && data && data.ok) {
+      appendStatus('已送达，小克会在 Grok Bot 对话里回复', true);
+    } else {
+      const err = (data && data.error) ? String(data.error) : ('HTTP ' + r.status);
+      appendStatus('发送失败：' + err + '。可点「复制」后粘贴到和小克的对话。', false);
+    }
+  } catch (e) {
+    appendStatus('网络异常：' + (e.message || String(e)) + '。可点「复制」离线发给小克。', false);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function loadStats() {
@@ -190,9 +232,9 @@ async function loadStats() {
     const q = (lib.questions || []).length;
     const p = (lib.points || []).length;
     box.innerHTML =
-      `<span><strong>${t}</strong>目录条目</span>` +
-      `<span><strong>${q}</strong>来源可查试题</span>` +
-      `<span><strong>${p}</strong>阅读考点</span>`;
+      `<span><strong>${t}</strong>目录</span>` +
+      `<span><strong>${q}</strong>试题</span>` +
+      `<span><strong>${p}</strong>考点</span>`;
   } catch (e) {
     box.innerHTML = `<span class="error">题库预览读取失败：${esc(e.message)}</span>`;
   }
@@ -204,14 +246,19 @@ function initPoints() {
   ).join('');
 }
 
+function setDraftOpen(open) {
+  $('#draft-panel').classList.toggle('hidden', !open);
+  $('#toggle-draft').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
 function tryUnlock() {
   const val = ($('#passphrase').value || '').trim();
   if (val === DEFAULT_PASS) {
     setUnlocked(true);
-    status('#gate-status', '');
+    gateStatus('');
     showWorkbench(true);
   } else {
-    status('#gate-status', '口令不正确，请再试。');
+    gateStatus('口令不正确，请再试。');
   }
 }
 
@@ -221,59 +268,61 @@ function bind() {
     if (e.key === 'Enter') { e.preventDefault(); tryUnlock(); }
   });
 
-  $('#ask-form').onsubmit = async e => {
-    e.preventDefault();
-    const type = $('#ask-type').value || '其他';
-    const message = $('#ask-message').value;
-    const contact = $('#ask-contact').value;
-    await submitRequest({ type, message, contact, draft: null, statusId: '#ask-status' });
+  document.querySelectorAll('.chip').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.chip').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentType = btn.dataset.type || '其他';
+    };
+  });
+
+  $('#send').onclick = async () => {
+    const message = ($('#chat-input').value || '').trim();
+    if (!message) return;
+    $('#chat-input').value = '';
+    await sendChat({ type: currentType, message, draft: null });
   };
 
-  $('#ask-copy').onclick = async () => {
-    const type = $('#ask-type').value || '其他';
-    const message = ($('#ask-message').value || '').trim();
-    const contact = ($('#ask-contact').value || '').trim();
-    if (!message) { status('#ask-status', '请先填写需求说明再复制。'); return; }
-    const plain = window.__yuejianLastPlain && window.__yuejianLastAsk === message
-      ? window.__yuejianLastPlain
-      : buildPlainText({ type, message, contact, draft: null });
+  $('#chat-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      $('#send').click();
+    }
+  });
+
+  $('#copy-last').onclick = async () => {
+    const text = lastPlain || ($('#chat-input').value || '').trim();
+    if (!text) {
+      appendStatus('暂无可复制内容。先发一条消息，或填写输入框。', false);
+      return;
+    }
     try {
-      await copyText(plain);
-      status('#ask-status', '已复制需求全文，可粘贴给小克。', true);
+      await copyText(text);
+      appendStatus('已复制到剪贴板（离线备用）。', true);
     } catch {
-      status('#ask-status', '复制失败，请长按文本自行选择复制。');
+      appendStatus('复制失败，请长按自行选择。', false);
     }
   };
+
+  $('#toggle-draft').onclick = () => {
+    const open = $('#draft-panel').classList.contains('hidden');
+    setDraftOpen(open);
+  };
+  $('#close-draft').onclick = () => setDraftOpen(false);
 
   $('#draft-form').onsubmit = async e => {
     e.preventDefault();
     const draft = readDraftForm(e.target);
-    if (!draft.stem) { status('#draft-status', '请填写题干。'); return; }
-    if (!draft.point_ids.length) { status('#draft-status', '请至少选择一个考点。'); return; }
-    if (!draft.source) { status('#draft-status', '请填写出处。'); return; }
-    const message = draftMessage(draft);
-    const plain = await submitRequest({
-      type: '加题入库',
-      message,
-      draft,
-      contact: '',
-      statusId: '#draft-status',
+    if (!draft.stem) { draftStatus('请填写题干。'); return; }
+    if (!draft.point_ids.length) { draftStatus('请至少选择一个考点。'); return; }
+    if (!draft.source) { draftStatus('请填写出处。'); return; }
+    draftStatus('');
+    setDraftOpen(false);
+    currentType = '加题入库';
+    document.querySelectorAll('.chip').forEach(b => {
+      b.classList.toggle('active', b.dataset.type === '加题入库');
     });
-    window.__yuejianLastDraftPlain = plain;
-  };
-
-  $('#draft-copy').onclick = async () => {
-    const draft = readDraftForm($('#draft-form'));
-    if (!draft.stem) { status('#draft-status', '请先填写题干再复制。'); return; }
-    if (!draft.point_ids.length) { status('#draft-status', '请至少选择一个考点。'); return; }
-    if (!draft.source) { status('#draft-status', '请填写出处。'); return; }
-    const plain = buildPlainText({ type: '加题入库', message: draftMessage(draft), draft, contact: '' });
-    try {
-      await copyText(plain);
-      status('#draft-status', '已复制加题需求全文，可粘贴给小克。', true);
-    } catch {
-      status('#draft-status', '复制失败，请长按文本自行选择复制。');
-    }
+    await sendChat({ type: '加题入库', message: draftMessage(draft), draft });
   };
 }
 
