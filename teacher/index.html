@@ -7,7 +7,7 @@
 <title>阅见 · 老师工作台</title>
 <link rel="stylesheet" href="style.css">
 <script src="config.js?v=1794066755"></script>
-<script src="app.js?v=1794066758" defer></script>
+<script src="app.js?v=1794067001" defer></script>
 </head>
 <body>
 <main>
@@ -78,9 +78,12 @@
           <button type="button" class="chip" data-type="加题入库">加题入库</button>
           <button type="button" class="chip" data-type="考点讲解片">考点讲解片</button>
         </div>
+        <div id="attach-preview" class="attach-preview" aria-live="polite"></div>
         <label class="sr-only" for="chat-input">消息</label>
-        <textarea id="chat-input" rows="2" maxlength="20000" placeholder="直接跟小克说：改站、加题、讲解片放哪里…" enterkeyhint="send"></textarea>
+        <textarea id="chat-input" rows="2" maxlength="20000" placeholder="直接跟小克说：改站、加题、讲解片放哪里…（可点「附件」上传图片/PDF）" enterkeyhint="send"></textarea>
         <div class="composer-actions">
+          <input type="file" id="file-input" accept="image/*,.pdf,application/pdf" multiple hidden>
+          <button type="button" id="attach-file" class="secondary ghost">附件</button>
           <button type="button" id="send" class="primary send">发送</button>
           <button type="button" id="refresh-replies" class="secondary ghost">刷新回复</button>
           <button type="button" id="copy-last" class="secondary ghost">复制</button>

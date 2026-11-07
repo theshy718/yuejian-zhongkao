@@ -124,3 +124,27 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
   .brand span{display:block;margin-left:0;margin-top:2px}
   .bubble{max-width:94%}
 }
+
+.attach-preview{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px;min-height:0}
+.attach-preview:empty{display:none}
+.attach-chip{
+  display:inline-flex;align-items:center;gap:6px;max-width:100%;
+  padding:4px 8px 4px 4px;border:1px solid var(--line);border-radius:8px;
+  background:#f7faf8;font-size:12px;color:var(--ink);
+}
+.attach-chip img{
+  width:36px;height:36px;object-fit:cover;border-radius:5px;flex-shrink:0;background:#e8eee9;
+}
+.attach-chip .attach-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}
+.attach-chip .attach-remove{
+  border:0;background:transparent;color:var(--muted);min-height:28px;padding:2px 6px;
+  font-size:14px;line-height:1;border-radius:4px;
+}
+.attach-chip .attach-remove:hover{background:#e8eee9;color:#a03525}
+.bubble-attach{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.bubble-attach a{font-size:12px;color:var(--green);word-break:break-all}
+.bubble-attach img{
+  max-width:min(220px,70vw);max-height:180px;border-radius:8px;
+  border:1px solid var(--line);display:block;cursor:zoom-in;
+}
+#attach-file{flex:0 0 auto;border:1px solid var(--line)}

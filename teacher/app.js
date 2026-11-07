@@ -73,12 +73,76 @@ function draftStatus(msg, good) {
   el.className = 'status ' + (good ? 'success' : (msg ? 'error' : ''));
 }
 
-function appendBubble({ role, text, kind }) {
+const FILE_HOST = 'https://yuejian-zhongkao.vercel.app/api/teacher-file?id=';
+const FILE_URL_RE = /https:\/\/yuejian-zhongkao\.vercel\.app\/api\/teacher-file\?id=[0-9a-f-]{36}/gi;
+const ALLOWED_MIME = new Set(['image/jpeg','image/png','image/webp','image/gif','application/pdf']);
+const MAX_ATTACH = 4;
+const MAX_BYTES = Math.floor(1.2 * 1024 * 1024);
+
+let pendingAttachments = [];
+
+function isImageMime(mime) {
+  return String(mime || '').startsWith('image/');
+}
+
+function extractFileUrls(text) {
+  const s = String(text || '');
+  const urls = [];
+  const re = new RegExp(FILE_URL_RE.source, 'gi');
+  let m;
+  while ((m = re.exec(s))) {
+    const u = m[0];
+    if (!urls.includes(u)) urls.push(u);
+  }
+  return urls;
+}
+
+function renderBodyHtml(text) {
+  const raw = String(text ?? '');
+  const urls = extractFileUrls(raw);
+  let html = esc(raw).replace(/\n/g, '<br>');
+  if (!urls.length) return html;
+  const parts = ['<div class="bubble-attach">'];
+  for (const u of urls) {
+    // only allow our host/path
+    if (!u.startsWith(FILE_HOST)) continue;
+    const lower = u; // url itself has no extension; infer from nearby mime line if present
+    // Prefer img for any teacher-file url that appears next to image mime in attachment lines
+    const near = raw.slice(Math.max(0, raw.indexOf(u) - 80), raw.indexOf(u) + u.length);
+    const asImage = /\((image\/(?:jpeg|png|webp|gif))\)/.test(near);
+    if (asImage) {
+      parts.push('<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer"><img src="' + esc(u) + '" alt="附件图片" loading="lazy"></a>');
+    } else {
+      parts.push('<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">打开附件</a>');
+    }
+  }
+  parts.push('</div>');
+  return html + parts.join('');
+}
+
+function appendBubble({ role, text, kind, localThumbs }) {
   const box = $('#messages');
   const div = document.createElement('div');
   div.className = 'bubble ' + role + (kind ? ' ' + kind : '');
+  let body = renderBodyHtml(text);
+  if (localThumbs && localThumbs.length) {
+    const bits = ['<div class="bubble-attach">'];
+    for (const t of localThumbs) {
+      if (t.blobUrl && isImageMime(t.mime)) {
+        bits.push('<img src="' + esc(t.blobUrl) + '" alt="' + esc(t.name || '附件') + '">');
+      } else if (t.url && isImageMime(t.mime) && String(t.url).startsWith(FILE_HOST)) {
+        bits.push('<a href="' + esc(t.url) + '" target="_blank" rel="noopener noreferrer"><img src="' + esc(t.url) + '" alt="' + esc(t.name || '附件') + '" loading="lazy"></a>');
+      } else if (t.url && String(t.url).startsWith(FILE_HOST)) {
+        bits.push('<a href="' + esc(t.url) + '" target="_blank" rel="noopener noreferrer">' + esc(t.name || '附件') + '</a>');
+      } else {
+        bits.push('<span>' + esc(t.name || '附件') + '</span>');
+      }
+    }
+    bits.push('</div>');
+    body += bits.join('');
+  }
   div.innerHTML = '<div class="bubble-meta">' + esc(role === 'user' ? '你' : '小克') + '</div>'
-    + '<div class="bubble-body">' + esc(text).replace(/\n/g, '<br>') + '</div>';
+    + '<div class="bubble-body">' + body + '</div>';
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
   return div;
@@ -295,28 +359,232 @@ function draftMessage(d) {
   ].join('\n');
 }
 
+
+function renderAttachPreview() {
+  const box = $('#attach-preview');
+  if (!box) return;
+  if (!pendingAttachments.length) {
+    box.innerHTML = '';
+    return;
+  }
+  box.innerHTML = pendingAttachments.map((a, i) => {
+    const thumb = (a.blobUrl && isImageMime(a.mime))
+      ? '<img src="' + esc(a.blobUrl) + '" alt="">'
+      : '<span class="attach-name">' + esc(a.mime === 'application/pdf' ? 'PDF' : '文件') + '</span>';
+    return '<div class="attach-chip" data-i="' + i + '">'
+      + thumb
+      + '<span class="attach-name" title="' + esc(a.name) + '">' + esc(a.name) + '</span>'
+      + '<button type="button" class="attach-remove" data-remove="' + i + '" aria-label="移除">×</button>'
+      + '</div>';
+  }).join('');
+  box.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.onclick = () => {
+      const i = Number(btn.getAttribute('data-remove'));
+      const item = pendingAttachments[i];
+      if (item && item.blobUrl) {
+        try { URL.revokeObjectURL(item.blobUrl); } catch {}
+      }
+      pendingAttachments.splice(i, 1);
+      renderAttachPreview();
+    };
+  });
+}
+
+function clearPendingAttachments() {
+  for (const a of pendingAttachments) {
+    if (a.blobUrl) {
+      try { URL.revokeObjectURL(a.blobUrl); } catch {}
+    }
+  }
+  pendingAttachments = [];
+  renderAttachPreview();
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || ''));
+    fr.onerror = () => reject(fr.error || new Error('read_failed'));
+    fr.readAsDataURL(file);
+  });
+}
+
+function dataUrlToBase64(dataUrl) {
+  const s = String(dataUrl || '');
+  const i = s.indexOf('base64,');
+  return i >= 0 ? s.slice(i + 7) : s;
+}
+
+function compressImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const maxEdge = 1000;
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
+        const scale = Math.min(1, maxEdge / Math.max(w, h));
+        w = Math.max(1, Math.round(w * scale));
+        h = Math.max(1, Math.round(h * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        let quality = 0.82;
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+        // shrink further if still large
+        while (dataUrl.length * 0.75 > MAX_BYTES && quality > 0.45) {
+          quality -= 0.08;
+          dataUrl = canvas.toDataURL('image/jpeg', quality);
+        }
+        URL.revokeObjectURL(url);
+        const b64 = dataUrlToBase64(dataUrl);
+        const approx = Math.floor(b64.length * 0.75);
+        if (approx > MAX_BYTES) {
+          reject(new Error('图片压缩后仍超过 1.2MB，请换一张更小的图。'));
+          return;
+        }
+        resolve({
+          name: (file.name || 'image').replace(/\.[^.]+$/, '') + '.jpg',
+          mime: 'image/jpeg',
+          dataBase64: b64,
+          blobUrl: dataUrl,
+          sizeApprox: approx,
+        });
+      } catch (e) {
+        URL.revokeObjectURL(url);
+        reject(e);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('无法读取图片'));
+    };
+    img.src = url;
+  });
+}
+
+async function prepareFile(file) {
+  const mime = String(file.type || '').toLowerCase();
+  if (!ALLOWED_MIME.has(mime)) {
+    throw new Error('仅支持 JPG / PNG / WebP / GIF / PDF');
+  }
+  if (mime === 'application/pdf') {
+    if (file.size > MAX_BYTES) {
+      throw new Error('PDF 超过 1.2MB，请压缩后再传。');
+    }
+    const dataUrl = await readFileAsDataURL(file);
+    return {
+      name: file.name || 'file.pdf',
+      mime,
+      dataBase64: dataUrlToBase64(dataUrl),
+      blobUrl: null,
+      sizeApprox: file.size,
+    };
+  }
+  // images: compress via canvas to JPEG
+  return compressImageFile(file);
+}
+
+async function addFilesFromInput(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const room = MAX_ATTACH - pendingAttachments.length;
+  if (room <= 0) {
+    appendStatus('每条消息最多 ' + MAX_ATTACH + ' 个附件。', false);
+    return;
+  }
+  const take = files.slice(0, room);
+  if (files.length > room) {
+    appendStatus('一次最多 ' + MAX_ATTACH + ' 个附件，已只加入前 ' + room + ' 个。', false);
+  }
+  for (const f of take) {
+    try {
+      const prepared = await prepareFile(f);
+      pendingAttachments.push({
+        name: prepared.name,
+        mime: prepared.mime,
+        blobUrl: prepared.blobUrl,
+        dataBase64: prepared.dataBase64,
+        file: f,
+      });
+    } catch (e) {
+      appendStatus(e && e.message ? e.message : '附件处理失败', false);
+    }
+  }
+  renderAttachPreview();
+}
+
+async function uploadOneAttachment(att) {
+  const payload = {
+    action: 'upload',
+    passphrase: DEFAULT_PASS,
+    threadId: threadId(),
+    filename: att.name,
+    mime: att.mime,
+    dataBase64: att.dataBase64,
+  };
+  const r = await fetch(chatApi(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    mode: 'cors',
+  });
+  let data = null;
+  try { data = await r.json(); } catch {}
+  if (!r.ok || !data || !data.ok) {
+    const err = (data && data.error) ? String(data.error) : ('HTTP ' + r.status);
+    if (err === 'file_too_large') throw new Error('文件过大（需 ≤1.2MB）');
+    if (err === 'unsupported_mime') throw new Error('不支持的文件类型');
+    throw new Error('上传失败：' + err);
+  }
+  return {
+    id: data.id,
+    filename: data.filename || att.name,
+    mime: data.mime || att.mime,
+    url: data.url,
+  };
+}
+
 async function sendChat({ type, message, draft }) {
   const text = String(message || '').trim();
-  if (!text) return;
+  const pending = pendingAttachments.slice();
+  if (!text && !pending.length) return;
 
-  const display = (type && type !== '其他' ? '【' + type + '】\n' : '') + text;
-  appendBubble({ role: 'user', text: display });
-  lastPlain = buildPlainText({ type, message: text, draft });
-
-  const payload = {
-    source: 'yuejian-teacher-chat',
-    type: type || '其他',
-    message: text,
-    draft: draft || null,
-    threadId: threadId(),
-    submittedAt: nowISO(),
-    page: location.href,
-    passphrase: DEFAULT_PASS,
-  };
+  const localThumbs = pending.map(a => ({
+    name: a.name,
+    mime: a.mime,
+    blobUrl: a.blobUrl,
+  }));
+  const display = (type && type !== '其他' ? '【' + type + '】\n' : '') + (text || '（附件）');
+  appendBubble({ role: 'user', text: display, localThumbs });
+  lastPlain = buildPlainText({ type, message: text || '（附件）', draft });
 
   const btn = $('#send');
+  const attachBtn = $('#attach-file');
   btn.disabled = true;
+  if (attachBtn) attachBtn.disabled = true;
   try {
+    const uploaded = [];
+    for (const att of pending) {
+      uploaded.push(await uploadOneAttachment(att));
+    }
+    clearPendingAttachments();
+
+    const payload = {
+      source: 'yuejian-teacher-chat',
+      type: type || '其他',
+      message: text || (uploaded.length ? '（见附件）' : ''),
+      draft: draft || null,
+      threadId: threadId(),
+      submittedAt: nowISO(),
+      page: location.href,
+      passphrase: DEFAULT_PASS,
+    };
+    if (uploaded.length) payload.attachments = uploaded;
+
     const r = await fetch(chatApi(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -335,9 +603,10 @@ async function sendChat({ type, message, draft }) {
       appendStatus('发送失败：' + err + '。可点「复制」后粘贴到和小克的对话。', false);
     }
   } catch (e) {
-    appendStatus('网络异常：' + (e.message || String(e)) + '。可点「复制」离线发给小克。', false);
+    appendStatus((e && e.message) ? e.message : ('网络异常：' + String(e)), false);
   } finally {
     btn.disabled = false;
+    if (attachBtn) attachBtn.disabled = false;
   }
 }
 
@@ -401,9 +670,19 @@ function bind() {
     };
   });
 
+  $('#attach-file').onclick = () => {
+    const input = $('#file-input');
+    if (input) input.click();
+  };
+  $('#file-input').addEventListener('change', async (e) => {
+    const input = e.target;
+    await addFilesFromInput(input.files);
+    input.value = '';
+  });
+
   $('#send').onclick = async () => {
     const message = ($('#chat-input').value || '').trim();
-    if (!message) return;
+    if (!message && !pendingAttachments.length) return;
     $('#chat-input').value = '';
     await sendChat({ type: currentType, message, draft: null });
   };
