@@ -31,12 +31,34 @@ const ALLOWED_MIME = new Set([
   'image/webp',
   'image/gif',
   'application/pdf',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-rar-compressed',
+  'application/vnd.rar',
+  'application/x-7z-compressed',
+  'application/x-tar',
+  'application/gzip',
+  'application/x-gzip',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/plain',
+  'text/csv',
+  'text/markdown',
+  'text/x-markdown',
+  'application/octet-stream',
 ]);
 
-const MAX_FILE_BYTES = Math.floor(1.25 * 1024 * 1024); // ~1.25MB decoded
-const MAX_ATTACHMENTS = 4;
+const ALLOWED_CONTENT_TYPES = Array.from(ALLOWED_MIME);
+
+const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100MB
+const MAX_ATTACHMENTS = 8;
 const FILE_PUBLIC_BASE = 'https://yuejian-zhongkao.vercel.app/api/teacher-file';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const BLOB_HOST_RE = /\.public\.blob\.vercel-storage\.com$|\.blob\.vercel-storage\.com$/i;
 
 function corsOrigin(req) {
   const origin = req.headers.origin || '';
@@ -132,7 +154,6 @@ function databaseUrl() {
 
 function sanitizeDbUrl(url) {
   if (!url) return '';
-  // neon serverless HTTP driver is happier without channel_binding
   return url.replace(/([?&])channel_binding=require&?/, '$1').replace(/[?&]$/, '');
 }
 
@@ -166,9 +187,14 @@ async function ensureSchema(sql) {
     thread_id text NOT NULL,
     filename text NOT NULL,
     mime text NOT NULL,
-    data_b64 text NOT NULL,
+    data_b64 text NOT NULL DEFAULT '',
+    blob_url text,
+    size_bytes bigint,
     created_at timestamptz NOT NULL DEFAULT now()
   )`;
+  await sql`ALTER TABLE yuejian_teacher_files ADD COLUMN IF NOT EXISTS blob_url text`;
+  await sql`ALTER TABLE yuejian_teacher_files ADD COLUMN IF NOT EXISTS size_bytes bigint`;
+  // Keep legacy rows; new blob-backed rows insert data_b64='' 
   await sql`CREATE INDEX IF NOT EXISTS yuejian_teacher_files_thread_id_idx
     ON yuejian_teacher_files (thread_id)`;
 }
@@ -202,13 +228,31 @@ async function listMessages(threadId, afterId) {
   }));
 }
 
-async function insertFile({ id, threadId, filename, mime, dataB64 }) {
+async function upsertFile({ id, threadId, filename, mime, dataB64, blobUrl, sizeBytes }) {
   const sql = getSql();
   await ensureSchema(sql);
   const rows = await sql`
-    INSERT INTO yuejian_teacher_files (id, thread_id, filename, mime, data_b64)
-    VALUES (${id}, ${threadId}, ${filename}, ${mime}, ${dataB64})
-    RETURNING id, filename, mime
+    INSERT INTO yuejian_teacher_files (id, thread_id, filename, mime, data_b64, blob_url, size_bytes)
+    VALUES (
+      ${id},
+      ${threadId},
+      ${filename},
+      ${mime},
+      ${dataB64 == null ? '' : String(dataB64)},
+      ${blobUrl || null},
+      ${sizeBytes == null ? null : Number(sizeBytes)}
+    )
+    ON CONFLICT (id) DO UPDATE SET
+      thread_id = EXCLUDED.thread_id,
+      filename = EXCLUDED.filename,
+      mime = EXCLUDED.mime,
+      blob_url = COALESCE(EXCLUDED.blob_url, yuejian_teacher_files.blob_url),
+      size_bytes = COALESCE(EXCLUDED.size_bytes, yuejian_teacher_files.size_bytes),
+      data_b64 = CASE
+        WHEN EXCLUDED.data_b64 IS NOT NULL AND EXCLUDED.data_b64 <> '' THEN EXCLUDED.data_b64
+        ELSE yuejian_teacher_files.data_b64
+      END
+    RETURNING id, filename, mime, blob_url, size_bytes
   `;
   return rows[0];
 }
@@ -219,10 +263,20 @@ function newFileId() {
   return require('crypto').randomUUID();
 }
 
-function stripDataUrlPrefix(b64) {
-  const s = String(b64 || '');
-  const m = /^data:[^;]+;base64,(.+)$/i.exec(s);
-  return m ? m[1] : s;
+function isAllowedBlobUrl(url) {
+  try {
+    const u = new URL(String(url || ''));
+    return BLOB_HOST_RE.test(u.hostname) && (u.protocol === 'https:');
+  } catch (e) {
+    return false;
+  }
+}
+
+function isAllowedAttachmentUrl(url) {
+  const s = String(url || '').trim();
+  if (!s) return false;
+  if (s.indexOf(FILE_PUBLIC_BASE) === 0) return true;
+  return isAllowedBlobUrl(s);
 }
 
 function normalizeAttachments(raw) {
@@ -238,7 +292,7 @@ function normalizeAttachments(raw) {
     if (!ALLOWED_MIME.has(mime)) continue;
     if (!filename) continue;
     const expected = FILE_PUBLIC_BASE + '?id=' + encodeURIComponent(id);
-    if (!url || url.indexOf(FILE_PUBLIC_BASE) !== 0) url = expected;
+    if (!url || !isAllowedAttachmentUrl(url)) url = expected;
     out.push({ id, filename, mime, url });
   }
   return out;
@@ -295,6 +349,21 @@ function passFromReq(req, body) {
   );
 }
 
+function parseClientPayload(raw) {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(String(raw));
+  } catch (e) {
+    return null;
+  }
+}
+
+function safeFilename(name) {
+  const s = String(name || 'file').trim().slice(0, 200);
+  return s || 'file';
+}
+
 async function handleGet(req, res) {
   const q = req.query || {};
   if (!checkPassphrase(passFromReq(req, {}))) {
@@ -342,45 +411,30 @@ async function handleReply(body, res) {
   }
 }
 
-async function handleUpload(body, res) {
+async function handleRegisterBlob(body, res) {
   if (!checkPassphrase(body.passphrase)) {
     return json(res, 401, { ok: false, error: 'unauthorized' });
   }
   const threadId = String(body.threadId || '').trim();
-  if (!threadId) {
-    return json(res, 400, { ok: false, error: 'missing_thread' });
-  }
-  const filename = String(body.filename || '').trim().slice(0, 200) || 'file';
-  const mime = String(body.mime || '').trim().toLowerCase();
-  if (!ALLOWED_MIME.has(mime)) {
-    return json(res, 400, { ok: false, error: 'unsupported_mime' });
-  }
-  const dataBase64 = stripDataUrlPrefix(body.dataBase64);
-  if (!dataBase64 || typeof dataBase64 !== 'string') {
-    return json(res, 400, { ok: false, error: 'missing_data' });
-  }
-  let buf;
+  const id = String(body.id || '').trim();
+  const filename = safeFilename(body.filename);
+  const mime = String(body.mime || '').trim().toLowerCase() || 'application/octet-stream';
+  const blobUrl = String(body.blobUrl || body.url || '').trim();
+  const sizeBytes = Number(body.size || body.sizeBytes || 0) || 0;
+  if (!threadId) return json(res, 400, { ok: false, error: 'missing_thread' });
+  if (!id || !UUID_RE.test(id)) return json(res, 400, { ok: false, error: 'invalid_id' });
+  if (!ALLOWED_MIME.has(mime)) return json(res, 400, { ok: false, error: 'unsupported_mime' });
+  if (!isAllowedBlobUrl(blobUrl)) return json(res, 400, { ok: false, error: 'invalid_blob_url' });
+  if (sizeBytes > MAX_FILE_BYTES) return json(res, 400, { ok: false, error: 'file_too_large' });
   try {
-    buf = Buffer.from(dataBase64, 'base64');
-  } catch (e) {
-    return json(res, 400, { ok: false, error: 'invalid_base64' });
-  }
-  if (!buf.length) {
-    return json(res, 400, { ok: false, error: 'empty_file' });
-  }
-  if (buf.length > MAX_FILE_BYTES) {
-    return json(res, 400, { ok: false, error: 'file_too_large' });
-  }
-  // store clean base64 only (no data: prefix)
-  const cleanB64 = buf.toString('base64');
-  const id = newFileId();
-  try {
-    await insertFile({
+    await upsertFile({
       id,
       threadId,
       filename,
       mime,
-      dataB64: cleanB64,
+      dataB64: '',
+      blobUrl,
+      sizeBytes: sizeBytes || null,
     });
   } catch (e) {
     if (e && e.code === 'db_not_configured') {
@@ -389,7 +443,76 @@ async function handleUpload(body, res) {
     throw e;
   }
   const url = FILE_PUBLIC_BASE + '?id=' + encodeURIComponent(id);
-  return json(res, 200, { ok: true, id, url, filename, mime });
+  return json(res, 200, { ok: true, id, url, filename, mime, blobUrl });
+}
+
+async function handleBlobProtocol(body, req, res) {
+  // eslint-disable-next-line global-require
+  const { handleUpload } = require('@vercel/blob/client');
+  try {
+    const jsonResponse = await handleUpload({
+      body,
+      request: req,
+      onBeforeGenerateToken: async (pathname, clientPayload) => {
+        const payload = parseClientPayload(clientPayload);
+        if (!payload) throw new Error('invalid_payload');
+        if (!checkPassphrase(payload.passphrase)) throw new Error('unauthorized');
+        const threadId = String(payload.threadId || '').trim();
+        if (!threadId) throw new Error('missing_thread');
+        const path = String(pathname || '');
+        if (!path.startsWith('teacher/' + threadId + '/') && !path.startsWith('teacher/')) {
+          throw new Error('invalid_pathname');
+        }
+        const fileId = String(payload.fileId || '').trim();
+        if (fileId && !UUID_RE.test(fileId)) throw new Error('invalid_id');
+        const filename = safeFilename(payload.filename);
+        const mime = String(payload.mime || '').trim().toLowerCase() || 'application/octet-stream';
+        if (!ALLOWED_MIME.has(mime)) throw new Error('unsupported_mime');
+        const size = Number(payload.size || 0) || 0;
+        if (size > MAX_FILE_BYTES) throw new Error('file_too_large');
+        return {
+          allowedContentTypes: ALLOWED_CONTENT_TYPES,
+          maximumSizeInBytes: MAX_FILE_BYTES,
+          addRandomSuffix: true,
+          tokenPayload: JSON.stringify({
+            threadId,
+            fileId: fileId || newFileId(),
+            filename,
+            mime,
+            size,
+          }),
+        };
+      },
+      onUploadCompleted: async ({ blob, tokenPayload }) => {
+        let meta = {};
+        try { meta = JSON.parse(tokenPayload || '{}'); } catch (e) { meta = {}; }
+        const id = (meta.fileId && UUID_RE.test(meta.fileId)) ? meta.fileId : newFileId();
+        const threadId = String(meta.threadId || '').trim() || 'unknown';
+        const filename = safeFilename(meta.filename || (blob && blob.pathname) || 'file');
+        const mime = String(meta.mime || (blob && blob.contentType) || 'application/octet-stream').toLowerCase();
+        const sizeBytes = Number(meta.size || 0) || null;
+        try {
+          await upsertFile({
+            id,
+            threadId,
+            filename,
+            mime: ALLOWED_MIME.has(mime) ? mime : 'application/octet-stream',
+            dataB64: '',
+            blobUrl: blob && blob.url ? blob.url : null,
+            sizeBytes,
+          });
+        } catch (e) {
+          // Let Blob retry onUploadCompleted a few times
+          throw e;
+        }
+      },
+    });
+    return json(res, 200, jsonResponse);
+  } catch (e) {
+    const msg = e && e.message ? String(e.message) : 'blob_upload_error';
+    const code = msg === 'unauthorized' ? 401 : 400;
+    return json(res, code, { ok: false, error: msg });
+  }
 }
 
 async function handleSend(body, res) {
@@ -410,7 +533,6 @@ async function handleSend(body, res) {
     try {
       await insertMessage(threadId, 'user', persistBody);
     } catch (e) {
-      // persist failure should not block webhook; log-ish via response meta later
       if (e && e.code !== 'db_not_configured') {
         // continue; still forward
       }
@@ -440,6 +562,11 @@ async function handleSend(body, res) {
   return json(res, 200, { ok: true });
 }
 
+function isBlobProtocol(body) {
+  const t = String((body && body.type) || '');
+  return t.indexOf('blob.') === 0;
+}
+
 module.exports = async function handler(req, res) {
   try {
     setCors(req, res);
@@ -460,14 +587,26 @@ module.exports = async function handler(req, res) {
     catch (e) {
       return json(res, 400, { ok: false, error: 'invalid_json' });
     }
+    if (isBlobProtocol(body)) {
+      await handleBlobProtocol(body, req, res);
+      return;
+    }
     const action = String(body.action || '').trim();
     if (action === 'reply') {
       await handleReply(body, res);
       return;
     }
-    if (action === 'upload') {
-      await handleUpload(body, res);
+    if (action === 'register-blob') {
+      await handleRegisterBlob(body, res);
       return;
+    }
+    // Legacy base64 upload removed — use Vercel Blob client upload
+    if (action === 'upload') {
+      return json(res, 410, {
+        ok: false,
+        error: 'upload_deprecated',
+        message: '请刷新老师页后使用直传（支持最大 100MB）',
+      });
     }
     await handleSend(body, res);
   } catch (e) {

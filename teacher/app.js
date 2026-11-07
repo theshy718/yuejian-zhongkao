@@ -75,9 +75,38 @@ function draftStatus(msg, good) {
 
 const FILE_HOST = 'https://yuejian-zhongkao.vercel.app/api/teacher-file?id=';
 const FILE_URL_RE = /https:\/\/yuejian-zhongkao\.vercel\.app\/api\/teacher-file\?id=[0-9a-f-]{36}/gi;
-const ALLOWED_MIME = new Set(['image/jpeg','image/png','image/webp','image/gif','application/pdf']);
-const MAX_ATTACH = 4;
-const MAX_BYTES = Math.floor(1.2 * 1024 * 1024);
+const BLOB_URL_RE = /https:\/\/[a-z0-9.-]+\.(?:public\.)?blob\.vercel-storage\.com\/[^\s<>"']+/gi;
+const BLOB_CLIENT_URL = 'https://esm.sh/@vercel/blob@2.8.2/client';
+const ALLOWED_MIME = new Set([
+  'image/jpeg','image/png','image/webp','image/gif',
+  'application/pdf',
+  'application/zip','application/x-zip-compressed',
+  'application/x-rar-compressed','application/vnd.rar',
+  'application/x-7z-compressed',
+  'application/x-tar','application/gzip','application/x-gzip',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/plain','text/csv','text/markdown','text/x-markdown',
+  'application/octet-stream',
+]);
+const EXT_MIME = {
+  '.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp','.gif':'image/gif',
+  '.pdf':'application/pdf',
+  '.zip':'application/zip','.rar':'application/vnd.rar','.7z':'application/x-7z-compressed',
+  '.tar':'application/x-tar','.gz':'application/gzip',
+  '.doc':'application/msword','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls':'application/vnd.ms-excel','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt':'application/vnd.ms-powerpoint','.pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.txt':'text/plain','.csv':'text/csv','.md':'text/markdown',
+};
+const ALLOWED_EXT = new Set(Object.keys(EXT_MIME));
+const MAX_ATTACH = 8;
+const MAX_BYTES = 100 * 1024 * 1024; // 100MB
+const IMAGE_COMPRESS_UNDER = 2 * 1024 * 1024;
 
 let pendingAttachments = [];
 
@@ -88,13 +117,56 @@ function isImageMime(mime) {
 function extractFileUrls(text) {
   const s = String(text || '');
   const urls = [];
-  const re = new RegExp(FILE_URL_RE.source, 'gi');
-  let m;
-  while ((m = re.exec(s))) {
-    const u = m[0];
-    if (!urls.includes(u)) urls.push(u);
+  for (const reSrc of [FILE_URL_RE, BLOB_URL_RE]) {
+    const re = new RegExp(reSrc.source, 'gi');
+    let m;
+    while ((m = re.exec(s))) {
+      const u = m[0];
+      if (!urls.includes(u)) urls.push(u);
+    }
   }
   return urls;
+}
+
+function isOurFileUrl(u) {
+  const s = String(u || '');
+  if (s.startsWith(FILE_HOST)) return true;
+  try {
+    const host = new URL(s).hostname;
+    return /\.(?:public\.)?blob\.vercel-storage\.com$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
+function formatBytes(n) {
+  const x = Number(n) || 0;
+  if (x < 1024) return x + ' B';
+  if (x < 1024 * 1024) return (x / 1024).toFixed(1) + ' KB';
+  return (x / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function extOf(name) {
+  const m = /(\.[a-z0-9]+)$/i.exec(String(name || ''));
+  return m ? m[1].toLowerCase() : '';
+}
+
+function guessMime(file) {
+  const mime = String(file && file.type || '').toLowerCase();
+  if (mime && ALLOWED_MIME.has(mime) && mime !== 'application/octet-stream') return mime;
+  const ext = extOf(file && file.name);
+  if (EXT_MIME[ext]) return EXT_MIME[ext];
+  if (mime === 'application/octet-stream' && ALLOWED_EXT.has(ext)) return EXT_MIME[ext] || mime;
+  return mime || '';
+}
+
+function kindLabel(mime, name) {
+  const m = String(mime || '');
+  if (m.startsWith('image/')) return '图片';
+  if (m === 'application/pdf') return 'PDF';
+  const ext = extOf(name).replace('.', '').toUpperCase();
+  if (ext) return ext;
+  return '文件';
 }
 
 function renderBodyHtml(text) {
@@ -104,17 +176,22 @@ function renderBodyHtml(text) {
   if (!urls.length) return html;
   const parts = ['<div class="bubble-attach">'];
   for (const u of urls) {
-    // only allow our host/path
-    if (!u.startsWith(FILE_HOST)) continue;
-    const lower = u; // url itself has no extension; infer from nearby mime line if present
-    // Prefer img for any teacher-file url that appears next to image mime in attachment lines
-    const near = raw.slice(Math.max(0, raw.indexOf(u) - 80), raw.indexOf(u) + u.length);
+    if (!isOurFileUrl(u)) continue;
+    const near = raw.slice(Math.max(0, raw.indexOf(u) - 120), raw.indexOf(u) + u.length);
+    const nameMatch = /-\s+([^\n(]+?)\s+\(/u.exec(near);
+    const name = (nameMatch && nameMatch[1] ? nameMatch[1].trim() : '附件');
     const asImage = /\((image\/(?:jpeg|png|webp|gif))\)/.test(near);
+    const dl = u.startsWith(FILE_HOST)
+      ? (u + (u.includes('?') ? '&' : '?') + 'download=1')
+      : u;
+    parts.push('<div class="attach-item">');
     if (asImage) {
-      parts.push('<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer"><img src="' + esc(u) + '" alt="附件图片" loading="lazy"></a>');
+      parts.push('<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer"><img src="' + esc(u) + '" alt="' + esc(name) + '" loading="lazy"></a>');
     } else {
-      parts.push('<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">打开附件</a>');
+      parts.push('<span class="attach-file-label">' + esc(name) + '</span>');
     }
+    parts.push('<a class="attach-dl" href="' + esc(dl) + '" target="_blank" rel="noopener noreferrer" download>下载</a>');
+    parts.push('</div>');
   }
   parts.push('</div>');
   return html + parts.join('');
@@ -128,15 +205,25 @@ function appendBubble({ role, text, kind, localThumbs }) {
   if (localThumbs && localThumbs.length) {
     const bits = ['<div class="bubble-attach">'];
     for (const t of localThumbs) {
+      const name = t.name || '附件';
+      const url = t.url || '';
+      const dl = url
+        ? (String(url).startsWith(FILE_HOST)
+            ? (url + (url.includes('?') ? '&' : '?') + 'download=1')
+            : url)
+        : '';
+      bits.push('<div class="attach-item">');
       if (t.blobUrl && isImageMime(t.mime)) {
-        bits.push('<img src="' + esc(t.blobUrl) + '" alt="' + esc(t.name || '附件') + '">');
-      } else if (t.url && isImageMime(t.mime) && String(t.url).startsWith(FILE_HOST)) {
-        bits.push('<a href="' + esc(t.url) + '" target="_blank" rel="noopener noreferrer"><img src="' + esc(t.url) + '" alt="' + esc(t.name || '附件') + '" loading="lazy"></a>');
-      } else if (t.url && String(t.url).startsWith(FILE_HOST)) {
-        bits.push('<a href="' + esc(t.url) + '" target="_blank" rel="noopener noreferrer">' + esc(t.name || '附件') + '</a>');
+        bits.push('<img src="' + esc(t.blobUrl) + '" alt="' + esc(name) + '">');
+      } else if (url && isImageMime(t.mime) && isOurFileUrl(url)) {
+        bits.push('<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer"><img src="' + esc(url) + '" alt="' + esc(name) + '" loading="lazy"></a>');
       } else {
-        bits.push('<span>' + esc(t.name || '附件') + '</span>');
+        bits.push('<span class="attach-file-label">' + esc(name) + (t.size ? ' · ' + formatBytes(t.size) : '') + '</span>');
       }
+      if (dl) {
+        bits.push('<a class="attach-dl" href="' + esc(dl) + '" target="_blank" rel="noopener noreferrer" download>下载</a>');
+      }
+      bits.push('</div>');
     }
     bits.push('</div>');
     body += bits.join('');
@@ -370,10 +457,12 @@ function renderAttachPreview() {
   box.innerHTML = pendingAttachments.map((a, i) => {
     const thumb = (a.blobUrl && isImageMime(a.mime))
       ? '<img src="' + esc(a.blobUrl) + '" alt="">'
-      : '<span class="attach-name">' + esc(a.mime === 'application/pdf' ? 'PDF' : '文件') + '</span>';
+      : '<span class="attach-kind">' + esc(kindLabel(a.mime, a.name)) + '</span>';
+    const size = a.size ? '<span class="attach-size">' + esc(formatBytes(a.size)) + '</span>' : '';
     return '<div class="attach-chip" data-i="' + i + '">'
       + thumb
       + '<span class="attach-name" title="' + esc(a.name) + '">' + esc(a.name) + '</span>'
+      + size
       + '<button type="button" class="attach-remove" data-remove="' + i + '" aria-label="移除">×</button>'
       + '</div>';
   }).join('');
@@ -421,7 +510,7 @@ function compressImageFile(file) {
     const img = new Image();
     img.onload = () => {
       try {
-        const maxEdge = 1000;
+        const maxEdge = 1600;
         let w = img.naturalWidth || img.width;
         let h = img.naturalHeight || img.height;
         const scale = Math.min(1, maxEdge / Math.max(w, h));
@@ -432,26 +521,21 @@ function compressImageFile(file) {
         canvas.height = h;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, w, h);
-        let quality = 0.82;
-        let dataUrl = canvas.toDataURL('image/jpeg', quality);
-        // shrink further if still large
-        while (dataUrl.length * 0.75 > MAX_BYTES && quality > 0.45) {
-          quality -= 0.08;
-          dataUrl = canvas.toDataURL('image/jpeg', quality);
-        }
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
         URL.revokeObjectURL(url);
+        // Convert compressed data URL to File for Blob upload
         const b64 = dataUrlToBase64(dataUrl);
-        const approx = Math.floor(b64.length * 0.75);
-        if (approx > MAX_BYTES) {
-          reject(new Error('图片压缩后仍超过 1.2MB，请换一张更小的图。'));
-          return;
-        }
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const outName = (file.name || 'image').replace(/\.[^.]+$/, '') + '.jpg';
+        const outFile = new File([bytes], outName, { type: 'image/jpeg' });
         resolve({
-          name: (file.name || 'image').replace(/\.[^.]+$/, '') + '.jpg',
+          name: outName,
           mime: 'image/jpeg',
-          dataBase64: b64,
+          file: outFile,
           blobUrl: dataUrl,
-          sizeApprox: approx,
+          size: outFile.size,
         });
       } catch (e) {
         URL.revokeObjectURL(url);
@@ -467,25 +551,31 @@ function compressImageFile(file) {
 }
 
 async function prepareFile(file) {
-  const mime = String(file.type || '').toLowerCase();
-  if (!ALLOWED_MIME.has(mime)) {
-    throw new Error('仅支持 JPG / PNG / WebP / GIF / PDF');
+  const mime = guessMime(file);
+  const ext = extOf(file.name);
+  if (!ALLOWED_MIME.has(mime) && !ALLOWED_EXT.has(ext)) {
+    throw new Error('不支持的文件类型。可用：图片 / PDF / 压缩包(zip·rar·7z·tar·gz) / Office / txt·csv·md');
   }
-  if (mime === 'application/pdf') {
-    if (file.size > MAX_BYTES) {
-      throw new Error('PDF 超过 1.2MB，请压缩后再传。');
+  if (file.size > MAX_BYTES) {
+    throw new Error('单文件不能超过 100MB（当前 ' + formatBytes(file.size) + '）');
+  }
+  const finalMime = ALLOWED_MIME.has(mime) ? mime : (EXT_MIME[ext] || 'application/octet-stream');
+  // Optional light compress only for small photos
+  if (isImageMime(finalMime) && file.size > 0 && file.size <= IMAGE_COMPRESS_UNDER && finalMime !== 'image/gif') {
+    try {
+      return await compressImageFile(file);
+    } catch {
+      // fall through to original
     }
-    const dataUrl = await readFileAsDataURL(file);
-    return {
-      name: file.name || 'file.pdf',
-      mime,
-      dataBase64: dataUrlToBase64(dataUrl),
-      blobUrl: null,
-      sizeApprox: file.size,
-    };
   }
-  // images: compress via canvas to JPEG
-  return compressImageFile(file);
+  const preview = isImageMime(finalMime) ? URL.createObjectURL(file) : null;
+  return {
+    name: file.name || ('file' + (ext || '')),
+    mime: finalMime,
+    file,
+    blobUrl: preview,
+    size: file.size,
+  };
 }
 
 async function addFilesFromInput(fileList) {
@@ -507,8 +597,8 @@ async function addFilesFromInput(fileList) {
         name: prepared.name,
         mime: prepared.mime,
         blobUrl: prepared.blobUrl,
-        dataBase64: prepared.dataBase64,
-        file: f,
+        file: prepared.file,
+        size: prepared.size,
       });
     } catch (e) {
       appendStatus(e && e.message ? e.message : '附件处理失败', false);
@@ -517,34 +607,87 @@ async function addFilesFromInput(fileList) {
   renderAttachPreview();
 }
 
+let blobUploadFn = null;
+async function getBlobUpload() {
+  if (blobUploadFn) return blobUploadFn;
+  const mod = await import(BLOB_CLIENT_URL);
+  if (!mod || typeof mod.upload !== 'function') {
+    throw new Error('无法加载上传组件，请强制刷新后再试');
+  }
+  blobUploadFn = mod.upload;
+  return blobUploadFn;
+}
+
+function safePathName(name) {
+  return String(name || 'file')
+    .replace(/[^\w.\u4e00-\u9fff-]+/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 80) || 'file';
+}
+
 async function uploadOneAttachment(att) {
-  const payload = {
-    action: 'upload',
-    passphrase: DEFAULT_PASS,
-    threadId: threadId(),
-    filename: att.name,
-    mime: att.mime,
-    dataBase64: att.dataBase64,
-  };
+  if (!att.file) throw new Error('缺少文件数据，请重新选择附件');
+  if (att.file.size > MAX_BYTES) {
+    throw new Error('单文件不能超过 100MB');
+  }
+  const fileId = uuid();
+  const tid = threadId();
+  const pathname = 'teacher/' + tid + '/' + fileId + '-' + safePathName(att.name);
+  const upload = await getBlobUpload();
+  let blob;
+  try {
+    blob = await upload(pathname, att.file, {
+      access: 'public',
+      handleUploadUrl: chatApi(),
+      multipart: att.file.size > 4 * 1024 * 1024,
+      contentType: att.mime || att.file.type || 'application/octet-stream',
+      clientPayload: JSON.stringify({
+        passphrase: DEFAULT_PASS,
+        threadId: tid,
+        fileId,
+        filename: att.name,
+        mime: att.mime,
+        size: att.file.size,
+      }),
+    });
+  } catch (e) {
+    const msg = (e && e.message) ? String(e.message) : String(e);
+    if (/unauthorized/i.test(msg)) throw new Error('口令校验失败，请刷新后重试');
+    if (/file_too_large|too large|maximumSize/i.test(msg)) throw new Error('文件过大（上限 100MB）');
+    if (/unsupported_mime|content type|contentType/i.test(msg)) throw new Error('不支持的文件类型');
+    throw new Error('上传失败：' + msg);
+  }
+  const blobUrl = blob && blob.url ? String(blob.url) : '';
+  if (!blobUrl) throw new Error('上传成功但未返回文件地址');
+
+  // Ensure Neon row exists even if Blob callback is delayed
   const r = await fetch(chatApi(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      action: 'register-blob',
+      passphrase: DEFAULT_PASS,
+      threadId: tid,
+      id: fileId,
+      filename: att.name,
+      mime: att.mime,
+      blobUrl,
+      size: att.file.size,
+    }),
     mode: 'cors',
   });
   let data = null;
   try { data = await r.json(); } catch {}
   if (!r.ok || !data || !data.ok) {
     const err = (data && data.error) ? String(data.error) : ('HTTP ' + r.status);
-    if (err === 'file_too_large') throw new Error('文件过大（需 ≤1.2MB）');
-    if (err === 'unsupported_mime') throw new Error('不支持的文件类型');
-    throw new Error('上传失败：' + err);
+    throw new Error('登记附件失败：' + err);
   }
   return {
-    id: data.id,
+    id: data.id || fileId,
     filename: data.filename || att.name,
     mime: data.mime || att.mime,
-    url: data.url,
+    url: data.url || (FILE_HOST + fileId),
+    size: att.file.size,
   };
 }
 
@@ -557,9 +700,10 @@ async function sendChat({ type, message, draft }) {
     name: a.name,
     mime: a.mime,
     blobUrl: a.blobUrl,
+    size: a.size,
   }));
   const display = (type && type !== '其他' ? '【' + type + '】\n' : '') + (text || '（附件）');
-  appendBubble({ role: 'user', text: display, localThumbs });
+  const userBubble = appendBubble({ role: 'user', text: display, localThumbs });
   lastPlain = buildPlainText({ type, message: text || '（附件）', draft });
 
   const btn = $('#send');
@@ -572,6 +716,29 @@ async function sendChat({ type, message, draft }) {
       uploaded.push(await uploadOneAttachment(att));
     }
     clearPendingAttachments();
+
+    // Replace local thumbs with server download links
+    if (uploaded.length && userBubble) {
+      const bodyEl = userBubble.querySelector('.bubble-body');
+      if (bodyEl) {
+        const attachHtml = ['<div class="bubble-attach">'];
+        for (const u of uploaded) {
+          const dl = u.url + (String(u.url).includes('?') ? '&' : '?') + 'download=1';
+          attachHtml.push('<div class="attach-item">');
+          if (isImageMime(u.mime)) {
+            attachHtml.push('<a href="' + esc(u.url) + '" target="_blank" rel="noopener noreferrer"><img src="' + esc(u.url) + '" alt="' + esc(u.filename) + '" loading="lazy"></a>');
+          } else {
+            attachHtml.push('<span class="attach-file-label">' + esc(u.filename) + (u.size ? ' · ' + formatBytes(u.size) : '') + '</span>');
+          }
+          attachHtml.push('<a class="attach-dl" href="' + esc(dl) + '" target="_blank" rel="noopener noreferrer" download>下载</a>');
+          attachHtml.push('</div>');
+        }
+        attachHtml.push('</div>');
+        const oldAttach = bodyEl.querySelector('.bubble-attach');
+        if (oldAttach) oldAttach.outerHTML = attachHtml.join('');
+        else bodyEl.insertAdjacentHTML('beforeend', attachHtml.join(''));
+      }
+    }
 
     const payload = {
       source: 'yuejian-teacher-chat',

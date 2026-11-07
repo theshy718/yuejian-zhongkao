@@ -84,15 +84,32 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
+async function ensureColumns(sql) {
+  // Soft-ensure for older deployments that hit teacher-file before teacher-chat
+  try {
+    await sql`ALTER TABLE yuejian_teacher_files ADD COLUMN IF NOT EXISTS blob_url text`;
+    await sql`ALTER TABLE yuejian_teacher_files ADD COLUMN IF NOT EXISTS size_bytes bigint`;
+  } catch (e) {
+    // table may not exist yet
+  }
+}
+
 async function loadFile(id) {
   const sql = getSql();
+  await ensureColumns(sql);
   const rows = await sql`
-    SELECT id, filename, mime, data_b64
+    SELECT id, filename, mime, data_b64, blob_url, size_bytes
     FROM yuejian_teacher_files
     WHERE id = ${id}
     LIMIT 1
   `;
   return rows[0] || null;
+}
+
+function contentDisposition(mime, filename, asAttachment) {
+  const safe = String(filename || 'file').replace(/["\r\n]/g, '');
+  const kind = asAttachment ? 'attachment' : 'inline';
+  return kind + '; filename="' + safe + '"';
 }
 
 module.exports = async function handler(req, res) {
@@ -123,16 +140,41 @@ module.exports = async function handler(req, res) {
     if (!row) {
       return json(res, 404, { ok: false, error: 'not_found' });
     }
+
     const mime = String(row.mime || 'application/octet-stream');
+    const filename = String(row.filename || 'file').replace(/["\r\n]/g, '');
+    const blobUrl = row.blob_url ? String(row.blob_url) : '';
+
+    if (blobUrl) {
+      // Prefer downloadUrl-style query if caller asks download=1; Blob public URL works as-is
+      let target = blobUrl;
+      if (String(q.download || '') === '1') {
+        try {
+          const u = new URL(blobUrl);
+          u.searchParams.set('download', filename);
+          target = u.toString();
+        } catch (e) {
+          target = blobUrl;
+        }
+      }
+      res.statusCode = 302;
+      res.setHeader('Location', target);
+      res.setHeader('Cache-Control', 'private, max-age=60');
+      res.end();
+      return;
+    }
+
     const buf = Buffer.from(String(row.data_b64 || ''), 'base64');
+    const isImage = mime.indexOf('image/') === 0;
+    const isPdf = mime === 'application/pdf';
     res.statusCode = 200;
     res.setHeader('Content-Type', mime);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.setHeader('Content-Length', String(buf.length));
-    const filename = String(row.filename || 'file').replace(/["\r\n]/g, '');
-    if (mime === 'application/pdf') {
-      res.setHeader('Content-Disposition', 'inline; filename="' + filename + '"');
-    }
+    res.setHeader(
+      'Content-Disposition',
+      contentDisposition(mime, filename, !(isImage || isPdf))
+    );
     res.end(buf);
   } catch (e) {
     json(res, 500, { ok: false, error: e && e.message ? e.message : 'server_error' });
