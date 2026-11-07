@@ -51,10 +51,13 @@ function showWorkbench(ok) {
   if (ok) {
     loadStats();
     if (!$('#messages').dataset.ready) {
-      appendSystem('你好，我是小克。改网页、加题、讲解片需求直接发在这里。回复会出现在 Grok Bot 对话里。');
+      appendSystem('你好，我是小克。改网页、加题、讲解片需求直接发在这里。回复会出现在本对话框里。');
       $('#messages').dataset.ready = '1';
     }
+    startPoll();
     $('#chat-input').focus();
+  } else {
+    stopPoll();
   }
 }
 
@@ -87,6 +90,76 @@ function appendSystem(text) {
 
 function appendStatus(text, ok) {
   return appendBubble({ role: 'bot', text, kind: ok ? 'ok' : 'err' });
+}
+
+
+const seenBotIds = new Set();
+let afterId = 0;
+let pollTimer = null;
+let lastActivity = Date.now();
+let pollFailStreak = 0;
+
+function markActivity() {
+  lastActivity = Date.now();
+}
+
+function pollIntervalMs() {
+  const idle = Date.now() - lastActivity;
+  if (idle > 60000) return 5000;
+  return 2000;
+}
+
+function stopPoll() {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function resetPollSoon() {
+  markActivity();
+  stopPoll();
+  pollTimer = setTimeout(pollOnce, 400);
+}
+
+async function pollOnce() {
+  stopPoll();
+  if (!unlocked()) return;
+  const tid = threadId();
+  const url = chatApi()
+    + '?threadId=' + encodeURIComponent(tid)
+    + '&afterId=' + encodeURIComponent(String(afterId))
+    + '&pass=' + encodeURIComponent(DEFAULT_PASS);
+  try {
+    const r = await fetch(url, { method: 'GET', mode: 'cors', cache: 'no-store' });
+    let data = null;
+    try { data = await r.json(); } catch {}
+    if (r.ok && data && data.ok && Array.isArray(data.messages)) {
+      pollFailStreak = 0;
+      for (const m of data.messages) {
+        const id = Number(m.id);
+        if (!Number.isFinite(id)) continue;
+        if (id > afterId) afterId = id;
+        if (m.role !== 'bot') continue;
+        if (seenBotIds.has(id)) continue;
+        seenBotIds.add(id);
+        appendBubble({ role: 'bot', text: String(m.body || '') });
+        markActivity();
+      }
+    } else {
+      pollFailStreak += 1;
+    }
+  } catch {
+    pollFailStreak += 1;
+  }
+  const delay = pollFailStreak > 3 ? 8000 : pollIntervalMs();
+  pollTimer = setTimeout(pollOnce, delay);
+}
+
+function startPoll() {
+  markActivity();
+  stopPoll();
+  pollTimer = setTimeout(pollOnce, 500);
 }
 
 function nowISO() {
@@ -210,7 +283,8 @@ async function sendChat({ type, message, draft }) {
     let data = null;
     try { data = await r.json(); } catch {}
     if (r.ok && data && data.ok) {
-      appendStatus('已送达，小克会在 Grok Bot 对话里回复', true);
+      appendStatus('已送达，等待小克回复…', true);
+      resetPollSoon();
     } else {
       const err = (data && data.error) ? String(data.error) : ('HTTP ' + r.status);
       appendStatus('发送失败：' + err + '。可点「复制」后粘贴到和小克的对话。', false);
