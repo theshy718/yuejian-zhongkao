@@ -111,12 +111,33 @@ let afterId = loadAfterId();
 let pollTimer = null;
 let lastActivity = Date.now();
 let pollFailStreak = 0;
+let waitingForReply = false;
+let waitingSince = 0;
 
 function markActivity() {
   lastActivity = Date.now();
 }
 
+function beginWaitingForReply() {
+  waitingForReply = true;
+  waitingSince = Date.now();
+  markActivity();
+}
+
+function endWaitingForReply() {
+  waitingForReply = false;
+  waitingSince = 0;
+}
+
 function pollIntervalMs() {
+  if (waitingForReply) {
+    // 等回复时约每秒拉一次，最长约 5 分钟保持高频
+    if (Date.now() - waitingSince > 5 * 60 * 1000) {
+      waitingForReply = false;
+      return 3000;
+    }
+    return 900;
+  }
   const idle = Date.now() - lastActivity;
   if (idle > 60000) return 5000;
   return 2000;
@@ -161,6 +182,7 @@ async function pollOnce() {
         markActivity();
         gotNew = true;
       }
+      if (gotNew && waitingForReply) endWaitingForReply();
       if (window.__refreshPending) {
         window.__refreshPending = false;
         if (!gotNew) appendStatus('暂无新回复。', true);
@@ -305,13 +327,9 @@ async function sendChat({ type, message, draft }) {
     try { data = await r.json(); } catch {}
     if (r.ok && data && data.ok) {
       appendStatus('已送达，等待小克在此回复…', true);
-      let bursts = 0;
-      const burst = () => {
-        bursts += 1;
-        resetPollSoon();
-        if (bursts < 45) setTimeout(burst, 2000);
-      };
-      burst();
+      beginWaitingForReply();
+      // 立刻拉一次，随后由 waitingForReply 高频轮询自动冒泡
+      resetPollSoon();
     } else {
       const err = (data && data.error) ? String(data.error) : ('HTTP ' + r.status);
       appendStatus('发送失败：' + err + '。可点「复制」后粘贴到和小克的对话。', false);
@@ -364,6 +382,12 @@ function tryUnlock() {
 }
 
 function bind() {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && unlocked()) resetPollSoon();
+  });
+  window.addEventListener('focus', () => {
+    if (unlocked()) resetPollSoon();
+  });
   $('#unlock').onclick = tryUnlock;
   $('#passphrase').addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); tryUnlock(); }
