@@ -132,7 +132,6 @@ async function handle(req, res, deps) {
   shared.setCors(req, res);
   if (req.method === 'OPTIONS') {
     res.statusCode = 204;
-    res.writableEnded = true;
     res.end();
     return;
   }

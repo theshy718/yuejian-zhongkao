@@ -59,11 +59,10 @@ function setCors(req, res) {
 }
 
 function json(res, code, obj) {
-  if (res.writableEnded) return;
+  if (res.writableEnded || res.headersSent) return;
   res.statusCode = code;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
-  res.writableEnded = true;
   res.end(JSON.stringify(obj));
 }
 

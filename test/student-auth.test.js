@@ -428,6 +428,44 @@ test('database failure stays a 503 without a password echo', async (t) => {
   assert.equal(JSON.stringify(res.json).includes('secret-pass'), false);
 });
 
+test('responses do not assign the read-only writableEnded property', async () => {
+  function lockedRes() {
+    let ended = false;
+    const res = {
+      statusCode: 0,
+      headersSent: false,
+      setHeader() {},
+      end() { ended = true; },
+    };
+    Object.defineProperty(res, 'writableEnded', {
+      configurable: false,
+      enumerable: true,
+      get() { return ended; },
+    });
+    return res;
+  }
+  const sent = lockedRes();
+  shared.json(sent, 200, { ok: true });
+  assert.equal(sent.statusCode, 200);
+  assert.equal(sent.writableEnded, true);
+  shared.json(sent, 500, { ok: false });
+  assert.equal(sent.statusCode, 200);
+
+  const authOpt = lockedRes();
+  await auth.handle(mockReq({ method: 'OPTIONS' }), authOpt, {
+    getSql() { throw new Error('no db'); },
+  });
+  assert.equal(authOpt.statusCode, 204);
+  assert.equal(authOpt.writableEnded, true);
+
+  const visitOpt = lockedRes();
+  await visit.handle(mockReq({ method: 'OPTIONS' }), visitOpt, {
+    getSql() { throw new Error('no db'); },
+  });
+  assert.equal(visitOpt.statusCode, 204);
+  assert.equal(visitOpt.writableEnded, true);
+});
+
 test('pages gate the library and keep the lecture on the points tab', () => {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
