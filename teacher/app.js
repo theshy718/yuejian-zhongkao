@@ -45,11 +45,17 @@ function chatApi() {
   return u || 'https://yuejian-zhongkao.vercel.app/api/teacher-chat';
 }
 
+function visitApi() {
+  const u = (typeof window.YUEJIAN_STUDENT_VISIT_API === 'string' && window.YUEJIAN_STUDENT_VISIT_API.trim()) || '';
+  return u || 'https://yuejian-zhongkao.vercel.app/api/student-visit';
+}
+
 function showWorkbench(ok) {
   $('#gate').classList.toggle('hidden', ok);
   $('#workbench').classList.toggle('hidden', !ok);
   if (ok) {
     loadStats();
+    loadVisits();
     if (!$('#messages').dataset.ready) {
       appendSystem('你好，我是小克。改网页、加题、讲解片需求直接发在这里。回复会出现在本对话框里。');
       $('#messages').dataset.ready = '1';
@@ -777,6 +783,131 @@ async function sendChat({ type, message, draft }) {
   }
 }
 
+const EVENT_LABEL = {
+  login: '登录',
+  view_tab: '浏览栏目',
+  view_point: '查看考点',
+  play_lecture: '播放讲解',
+  view_question: '查看题目',
+};
+const TAB_LABEL = { texts: '课文目录', questions: '试题题库', points: '八大考点' };
+
+function stripSecrets(value) {
+  if (Array.isArray(value)) return value.map(stripSecrets);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  Object.keys(value).forEach((key) => {
+    if (/password|token|passphrase|secret/i.test(key)) return;
+    out[key] = stripSecrets(value[key]);
+  });
+  return out;
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour12: false,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function eventLine(item) {
+  const label = EVENT_LABEL[item.event] || item.event || '访问';
+  let extra = '';
+  if (item.event === 'view_tab') extra = TAB_LABEL[item.detail] || '';
+  else if (item.event === 'view_point' || item.event === 'view_question' || item.event === 'play_lecture') extra = item.detail || '';
+  return fmtTime(item.createdAt) + ' ' + label + (extra ? ' · ' + extra : '');
+}
+
+function setVisitsOpen(open) {
+  const body = $('#visits-body');
+  const btn = $('#toggle-visits');
+  if (!body || !btn) return;
+  body.classList.toggle('hidden', !open);
+  btn.textContent = open ? '收起' : '展开';
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function visitsStatus(msg, good) {
+  const el = $('#visits-status');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.className = 'status ' + (good ? 'success' : (msg ? 'error' : ''));
+}
+
+function renderVisits(raw) {
+  const data = stripSecrets(raw || {});
+  const summary = $('#visits-summary');
+  const points = $('#visits-points');
+  const scroll = $('#visits-scroll');
+  if (!summary || !points || !scroll) return;
+  const totals = data.eventTotals || {};
+  summary.innerHTML =
+    `<span class="visit-chip">注册学生<strong>${esc(data.studentCount || 0)}</strong></span>` +
+    `<span class="visit-chip">访问合计<strong>${esc(data.visitTotal || 0)}</strong></span>` +
+    `<span class="visit-chip">讲解播放<strong>${esc(data.lecturePlays || 0)}</strong></span>` +
+    `<span class="visit-chip">登录<strong>${esc(totals.login || 0)}</strong></span>` +
+    `<span class="visit-chip">浏览栏目<strong>${esc(totals.view_tab || 0)}</strong></span>` +
+    `<span class="visit-chip">查看题目<strong>${esc(totals.view_question || 0)}</strong></span>`;
+  const pointList = Array.isArray(data.points) ? data.points : [];
+  points.innerHTML = pointList.map((p) =>
+    `<span class="visit-chip">${esc(p.name || '')}<strong>${esc(p.visits || 0)}</strong></span>`
+  ).join('');
+  const students = Array.isArray(data.students) ? data.students : [];
+  if (!students.length) {
+    scroll.innerHTML = '<p class="muted">还没有学生注册。学生在查询站注册并打开考点后，访问会记在这里。</p>';
+  } else {
+    const head = SHORT_NAMES.map((name) => `<th title="${esc(name)}">${esc(name)}</th>`).join('');
+    const rows = students.map((stu) => {
+      const counts = Array.isArray(stu.pointVisits) ? stu.pointVisits : [];
+      const cells = SHORT_NAMES.map((_, i) => `<td class="num">${esc(counts[i] || 0)}</td>`).join('');
+      const recent = (stu.recentEvents || []).map((item) => `<span class="recent-event">${esc(eventLine(item))}</span>`).join('');
+      const display = stu.displayName ? `<div class="muted">${esc(stu.displayName)}</div>` : '';
+      return `<tr><td>${esc(stu.username || '')}${display}</td><td>${esc(fmtTime(stu.createdAt))}</td><td>${esc(fmtTime(stu.lastLoginAt))}</td>${cells}<td>${recent || '—'}</td></tr>`;
+    }).join('');
+    scroll.innerHTML =
+      '<table><thead><tr><th>用户名</th><th>注册时间</th><th>最近登录</th>' + head +
+      '<th>最近动态</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+  const when = data.generatedAt ? '更新于 ' + fmtTime(data.generatedAt) + '（上海）' : '';
+  const trunc = data.studentsTruncated ? ' 仅显示最近 300 名学生。' : '';
+  visitsStatus(when + trunc, true);
+}
+
+async function loadVisits() {
+  const summary = $('#visits-summary');
+  if (!summary || !unlocked()) return;
+  summary.textContent = '正在读取访问数据…';
+  try {
+    const r = await fetch(visitApi() + '?t=' + Date.now(), {
+      method: 'GET',
+      mode: 'cors',
+      cache: 'no-store',
+      headers: { 'X-Yuejian-Pass': DEFAULT_PASS },
+    });
+    let data = null;
+    try { data = await r.json(); } catch (e) { data = null; }
+    if (!r.ok || !data || !data.ok) {
+      const msg = (data && data.message) ? data.message : ('无法读取访问数据（HTTP ' + r.status + '）');
+      summary.innerHTML = '';
+      if ($('#visits-points')) $('#visits-points').innerHTML = '';
+      if ($('#visits-scroll')) $('#visits-scroll').innerHTML = '';
+      visitsStatus(msg, false);
+      return;
+    }
+    renderVisits(data);
+  } catch (e) {
+    summary.innerHTML = '';
+    visitsStatus('网络异常，访问数据没有刷新。聊天仍可使用。', false);
+  }
+}
+
 async function loadStats() {
   const box = $('#lib-stats');
   try {
@@ -825,6 +956,13 @@ function bind() {
     if (unlocked()) resetPollSoon();
   });
   $('#unlock').onclick = tryUnlock;
+  const refreshVisits = $('#refresh-visits');
+  if (refreshVisits) refreshVisits.onclick = () => { if (unlocked()) loadVisits(); };
+  const toggleVisits = $('#toggle-visits');
+  if (toggleVisits) toggleVisits.onclick = () => {
+    const open = $('#visits-body') && $('#visits-body').classList.contains('hidden');
+    setVisitsOpen(open);
+  };
   $('#passphrase').addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); tryUnlock(); }
   });

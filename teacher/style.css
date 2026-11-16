@@ -167,3 +167,23 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 }
 .bubble-attach .attach-dl:hover{background:#1e5146}
 .bubble.user .bubble-attach .attach-dl{background:#1e5146}
+
+.visits{
+  flex-shrink:0;background:#fff;border-bottom:1px solid var(--line);
+  padding:12px 16px 10px;max-height:min(320px,40dvh);overflow:auto;
+}
+.visits-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.visits-head h2{font-size:16px}
+.visits-grid{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 8px}
+.visit-chip{
+  background:#f4f7f3;border:1px solid var(--line);border-radius:6px;
+  padding:6px 8px;font-size:12px;color:var(--muted);min-width:72px;
+}
+.visit-chip strong{display:block;color:var(--ink);font-size:16px;font-weight:700}
+.visits-scroll{overflow:auto;border:1px solid var(--line);border-radius:6px;background:#fff}
+.visits table{width:100%;border-collapse:collapse;font-size:12px;min-width:860px}
+.visits th,.visits td{border-bottom:1px solid var(--line);padding:6px 6px;text-align:left;vertical-align:top}
+.visits th{color:var(--muted);font-weight:600;white-space:nowrap;background:#f7faf8}
+.visits td.num{text-align:right;font-variant-numeric:tabular-nums}
+.visits td:first-child,.visits th:first-child{white-space:nowrap;min-width:72px}
+.recent-event{display:block;color:var(--muted);white-space:nowrap}

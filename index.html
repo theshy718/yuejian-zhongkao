@@ -4,15 +4,42 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>阅见 · 中考语文资料库</title>
-<link rel="stylesheet" href="style.css">
-<script src="app.js" defer></script>
+<link rel="stylesheet" href="style.css?v=2026111601">
+<script src="app.js?v=2026111601" defer></script>
 </head>
 <body>
 <header>
   <div class="brand">阅见 <span>中考语文 · 学习资料库</span></div>
+  <div id="session-bar" class="session-bar" hidden>
+    <span id="session-name"></span>
+    <button type="button" id="logout">退出</button>
+  </div>
 </header>
 <main>
-<div id="student-home">
+<section id="auth-gate" class="auth-gate" aria-labelledby="auth-title">
+  <p class="eyebrow">学生入口</p>
+  <h1 id="auth-title">登录后查阅资料</h1>
+  <p class="muted">请使用自己的用户名和密码。第一次来请先注册，无需邮箱或手机号。</p>
+  <div class="auth-switch" role="tablist" aria-label="登录或注册">
+    <button type="button" id="show-login" role="tab" aria-selected="true">登录</button>
+    <button type="button" id="show-register" role="tab" aria-selected="false">注册</button>
+  </div>
+  <form id="auth-form" novalidate>
+    <label>用户名
+      <input id="auth-username" name="username" autocomplete="username" maxlength="20" spellcheck="false" placeholder="2–20 位字母、数字、下划线或中文">
+    </label>
+    <label id="display-name-label" hidden>显示名（可选）
+      <input id="auth-display" name="displayName" maxlength="20" autocomplete="nickname" placeholder="同学之间的称呼，可不填">
+    </label>
+    <label>密码
+      <input id="auth-password" name="password" type="password" autocomplete="current-password" maxlength="128" placeholder="至少 8 位">
+    </label>
+    <button type="submit" class="primary" id="auth-submit">登录</button>
+    <p id="auth-status" role="status"></p>
+  </form>
+  <p class="auth-note">阅见 · 学生账号只用于查阅本站资料</p>
+</section>
+<div id="student-home" hidden>
   <section class="intro">
     <p class="eyebrow">读懂文章 · 有据作答</p>
     <h1>让每一种题型，都有迹可循。</h1>
@@ -52,8 +79,8 @@
       <button id="next">下一页</button>
     </div>
   </section>
+<footer>阅见 · 独立教学资料工具，不隶属任何培训品牌。原始题目保留来源，解析来源分别标注。<br>学生查询版 · 请使用本人账号查阅，不提供在线录入、上传或网址抓取。</footer>
 </div>
-<footer>阅见 · 独立教学资料工具，不隶属任何培训品牌。原始题目保留来源，解析来源分别标注。<br>公开学生查询版 · 仅供查询，不提供在线录入、上传或网址抓取。</footer>
 </main>
 </body>
 </html>

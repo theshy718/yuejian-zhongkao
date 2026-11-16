@@ -1,0 +1,11 @@
+{
+  "name": "yuejian-zhongkao",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
+    "@vercel/blob": "^2.8.2"
+  }
+}

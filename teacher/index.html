@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
 <title>阅见 · 老师工作台</title>
-<link rel="stylesheet" href="style.css">
-<script src="config.js?v=1794069001"></script>
-<script src="app.js?v=1794069001" defer></script>
+<link rel="stylesheet" href="style.css?v=2026111601">
+<script src="config.js?v=2026111601"></script>
+<script src="app.js?v=2026111601" defer></script>
 </head>
 <body>
 <main>
@@ -32,6 +32,22 @@
     </header>
 
     <div id="lib-stats" class="stats bar" aria-live="polite">正在读取当前题库…</div>
+
+    <section id="visits" class="visits" aria-labelledby="visits-title">
+      <div class="visits-head">
+        <h2 id="visits-title">访问数据</h2>
+        <div class="header-actions">
+          <button type="button" id="toggle-visits" class="ghost small" aria-expanded="true" aria-controls="visits-body">收起</button>
+          <button type="button" id="refresh-visits" class="ghost small">刷新</button>
+        </div>
+      </div>
+      <div id="visits-body">
+        <div id="visits-summary" class="visits-grid" aria-live="polite">正在读取访问数据…</div>
+        <div id="visits-points" class="visits-grid"></div>
+        <div id="visits-scroll" class="visits-scroll"></div>
+        <p id="visits-status" class="status" role="status"></p>
+      </div>
+    </section>
 
     <section id="draft-panel" class="draft-panel hidden" aria-labelledby="draft-title">
       <div class="draft-head">

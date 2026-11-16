@@ -35,7 +35,7 @@ function setCors(req, res) {
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Yuejian-Pass');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Yuejian-Pass, Authorization');
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
